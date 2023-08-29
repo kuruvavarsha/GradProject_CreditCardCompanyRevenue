@@ -1,0 +1,478 @@
+---
+title: "Mortgage Rate- Ratio - CFF3"
+author: "Varsha Kuruva"
+format: 
+  html:
+    code-fold: true
+    embed-resources: true
+knitr:
+ opts_chunk:
+  echo: TRUE
+  code-fold: TRUE
+  warning: FALSE
+  message: FALSE
+editor: visual
+---
+
+```{r}
+#| include: false
+
+knitr::opts_chunk$set(
+  fig.align = "center"
+)
+
+library(tidyverse)
+library(lmtest)
+library(tseries)
+library(data.table)
+library(dplyr)
+library(tidyverse)
+library(rmarkdown)
+library(gapminder)
+library(janitor)
+library(lubridate)
+library(scales)
+library(gt)
+library(patchwork)
+library(kableExtra)
+library(data.table)
+library(corrplot)
+library(zoo)
+library(forecast)
+library(fable)
+library(feasts)
+library(tsibble)
+library(tseries)
+library(ggplot2)
+library(psych)
+library(zoo)
+library(gridExtra)
+library(lmtest)
+```
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+
+
+
+
+CFF_3 <- fread("C:\\Users\\varsh\\OneDrive\\Documents\\Graduate Case Studies\\Data\\CFF_3.csv", header = T)
+#model_dates<-read.csv("Data/Model Dates.csv")
+# Aggregating CFF_1 on month level (Difference of Actuals & Predicted)
+CFF_3_agg <- CFF_3 %>% group_by(`Model Date ID`, `Month Number`, `Transaction Type`) %>% summarize(Amount = sum(Amount))
+CFF_3_agg_wider <- CFF_3_agg %>%
+  pivot_wider(names_from = `Transaction Type`,values_from = Amount) %>%
+  mutate(Totalratio= A/P)
+
+CFF_3_agg_ratio <- CFF_3_agg_wider[,c(2,5)]
+
+CFF_3_agg_ratio<-as.data.frame(CFF_3_agg_ratio)
+base_date <- as.Date("2013-10-01")
+Date <- base_date+ months(CFF_3_agg_ratio$`Month Number`-1)
+CFF_3_agg_ratio <- data.frame(Date = Date,ratio=CFF_3_agg_ratio$Totalratio)
+CFF_3_agg_ratio
+ 
+
+mortgage_rate<-read.csv("C:\\Users\\varsh\\OneDrive\\Documents\\Graduate Case Studies\\Data\\WeeklyMortgageRate_edited.csv ")
+#head(mortgage_rate)
+#colnames(mortgage_rate) <- c('Date','Mrate')
+
+
+
+
+
+names(mortgage_rate)[2] <- "Mrate"
+
+mortgage_rate <- mortgage_rate %>%
+  filter(Year>=2013 & Date_Key >= '2013-10') %>% # Corrected Date_Key format
+  mutate(Week = yearmonth(Date_Key)) %>% 
+  group_by(Week) %>%
+  summarise(Mrate = mean(Mrate))
+names(mortgage_rate)[1] <- "Date"
+#head(mortgage_rate)
+
+#Appending unemployment rate to CFF_1 Ratio file
+CFF_3_Ratio_Mortgage<-merge(CFF_3_agg_ratio,mortgage_rate, by ="Date")
+head(CFF_3_Ratio_Mortgage)
+#write.csv(CFF_3_Ratio_Mortgage,"CFF_3_Ratio_Mortgage.csv")
+
+```
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+
+# Reading data
+data <- fread("CFF_3_Ratio_Mortgage.csv", header = T, fill = TRUE)
+#head(data)
+summary(data)
+
+data$V1 <- NULL
+# Rename columns
+colnames(data) <- c("time", "ratio", "Mrate")
+#head(data)
+
+datanew <- data %>%
+   mutate(time = yearmonth(time))
+
+#head(datanew)
+```
+
+## Time Series plot of Ratio of actuals and projections - Variable Y
+
+The ratio plot has a lot of fluctuations in the time series plot with a steep dip in 2017
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#Time series plot for ratio
+datanew %>%
+    ggplot() +
+    geom_line(aes(time,ratio)) +
+    theme_bw() +
+    ggtitle("Time series plot of ratio") +
+    xlab("time") +
+    ylab("ratio")
+```
+
+***The data is stationery.***
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+# Calculate summary statistics
+#head(datanew)
+
+# ADF Test for y1
+adf.test(datanew$ratio)
+#Non stationery because p value is wayy greater than 0.05
+# KPSS Test for y1
+kpss.test(datanew$ratio)
+#Non stationery because p values <<0.05
+```
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+#Checking for mean stationarity for Ratio column 
+data_roll <- datanew %>%
+  mutate(
+    close_mean = zoo::rollmean(
+      ratio, 
+      k = 12, 
+      fill = NA),
+    close_sd = zoo::rollapply(
+      ratio, 
+      FUN = sd, 
+      width = 12, 
+      fill = NA)
+  )
+
+data_rollmean <- data_roll %>%
+  ggplot() +
+  geom_line(aes(time, ratio)) +
+  geom_line(aes(time, close_mean),color='blue') +
+  theme_bw() +
+  ggtitle("Mean of Difference  over time") +
+  ylab("Ratio of  actuals and projected values") +
+  xlab("Time")
+data_rollmean
+```
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+
+data_roll <- datanew %>%
+  mutate(
+    close_mean = zoo::rollmean(
+      ratio, 
+      k = 12, 
+      fill = NA),
+    close_sd = zoo::rollapply(
+      ratio, 
+      FUN = sd, 
+      width = 12, 
+      fill = NA)
+  )
+data_rollsd <- data_roll %>%
+  ggplot() +
+  geom_line(aes(time, close_sd)) +
+  geom_smooth(aes(time,close_sd),method='lm',se=F)+
+  theme_bw() +
+  ggtitle("Rolling SD Ratio of actuals and predicted") +
+  ylab("Ratio of actuals and predicted") +
+  xlab("Year")
+
+data_rollsd
+
+```
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+data_trans <- datanew %>%
+  mutate(data_log = log1p(ratio)) 
+  
+
+data_trans %>%
+  ggplot() +
+  geom_line(aes(time, data_log)) +
+  #geom_line(aes(time, data_boxcox),color='blue') +
+  theme_bw() +
+  ggtitle("Transformed ratio data") +
+  ylab("Ratio data transformed") +
+  xlab("Year")
+```
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+data_trans = datanew %>%
+  mutate(data_log = log1p(ratio),
+  value_log_diff = data_log - lag(data_log))
+
+data_trans %>%
+  ggplot() +
+  geom_line(aes(time, value_log_diff),color = 'blue') +
+  theme_bw() +
+  ggtitle("Transformed and differenced ratio data") +
+  ylab("Ratio data transformed and differenced") +
+  xlab("Year")
+```
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+
+adf.test(na.omit(data_trans$value_log_diff))
+```
+
+## Time Series plot of Variable X : Mortgage rate
+
+Mortgage Rate has multiple fluctuations with a major dip before 2017 and increases after that.
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+
+
+#Time series plot for Mortgage rate
+datanew %>%
+    ggplot() +
+    geom_line(aes(time,Mrate)) +
+    theme_bw() +
+    ggtitle("Time series plot of Mortgage rate") +
+    xlab("time") +
+    ylab(" Mortgage rate")
+```
+
+### Stationarity Test for Variable X :
+
+***Variable X is "non-stationary".***
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+
+# ADF Test for y2
+adf.test(datanew$Mrate)
+#Non stationery because p value is wayy greater than 0.05
+
+# KPSS Test for y2
+kpss.test(datanew$Mrate)
+#Non stationery because p values <<0.05
+```
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+#Checking for mean stationarity for Mortgage column 
+data_roll <- datanew %>%
+  mutate(
+    close_mean_mrate = zoo::rollmean(
+      Mrate, 
+      k = 12, 
+      fill = NA),
+    close_sd_mrate = zoo::rollapply(
+      Mrate, 
+      FUN = sd, 
+      width = 12, 
+      fill = NA)
+  )
+
+data_rollmean_mrate <- data_roll %>%
+  ggplot() +
+  geom_line(aes(time, Mrate)) +
+  geom_line(aes(time, close_mean_mrate),color='blue') +
+  theme_bw() +
+  ggtitle("Mean of Mortgage Rate  over time") +
+  ylab("Mortgage Rate") +
+  xlab("Time")
+data_rollmean_mrate
+```
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+data_roll <- datanew %>%
+  mutate(
+    close_mean_mrate = zoo::rollmean(
+      Mrate, 
+      k = 12, 
+      fill = NA),
+    close_sd_mrate = zoo::rollapply(
+      Mrate, 
+      FUN = sd, 
+      width = 12, 
+      fill = NA)
+  )
+data_rollsd <- data_roll %>%
+  ggplot() +
+  geom_line(aes(time, close_sd_mrate)) +
+  geom_smooth(aes(time,close_sd_mrate),method='lm',se=F)+
+  theme_bw() +
+  ggtitle("Rolling SD of Mortgage Rate") +
+  ylab("Mortgage Rate") +
+  xlab("Year")
+
+data_rollsd
+```
+
+#### [*wt=log(xt)*]{.underline}
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+data_trans_2 <- datanew %>%
+  mutate(data_log_mrate = log1p(Mrate)) 
+  #mutate(data_boxcox_unemp = forecast::BoxCox(ratio, lambda = "auto"))
+  
+
+data_trans_2 %>%
+  ggplot() +
+  geom_line(aes(time, data_log_mrate)) +
+  #geom_line(aes(time, data_boxcox_unemp),color='blue') +
+  theme_bw() +
+  ggtitle("Transformed mortgage rate data") +
+  ylab("Mortgage data transformed") +
+  xlab("Year")
+```
+
+***wd=log(xt)-log(xt-1)***
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+
+data_trans_2 = data_trans_2 %>%
+  mutate(data_log_mrate = log1p(Mrate),
+  value_log_diff_mrate = data_log_mrate - lag(data_log_mrate))
+
+data_trans_2 %>%
+  ggplot() +
+  geom_line(aes(time, value_log_diff_mrate),color = 'blue') +
+  theme_bw() +
+  ggtitle("Transformed and differenced mortgage Rate") +
+  ylab("Mortgage data transformed and differenced") +
+  xlab("Year")
+```
+
+***Variable x is now "stationary"***.
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+
+adf.test(na.omit(data_trans_2$value_log_diff_mrate))
+```
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+data_final <- merge(data_trans, data_trans_2, by.x = 'time', by.y = 'time')
+#head(data_final)
+data_final$ratio.y <- NULL
+data_final$Mrate.y <- NULL
+#data_final$data_log.y <- NULL
+#data_final$value_log_diff.y <- NULL
+#head(data_final)
+colnames(data_final) <- c("time", "ratio", "Unemp", "value_log","value_log_diff", "value_log_mrate", "value_log_diff_mrate")
+data_final[1, "ratio"] <- NA
+#head(data_final)
+```
+
+### Granger Causality, Model Summary and Inferences :
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#Granger causality test
+#(value_log_diff ~ value_log_diff_mrate, order = 3, data = data_final)
+
+#Dynamic regression
+yh <- embed(data_final$ratio,4)
+xh <- embed(data_final$value_log_diff_mrate,4)
+mh <- lm(yh[,1] ~ yh[,2:4] + xh)
+summary(mh)
+
+#ANOVA
+mh2 <- lm(yh[,1] ~ yh[,2:4])
+anova(mh, mh2)
+```
+
+We can conclude that ***Mortgage Rate granger causes Ratio .***
+
+In this case , **xh3 and xh4** are statistically significant :
+
+For every unit increase in **xh3**, the response variable that is Ratio **is estimated to decrease by 1.51028** **units**, holding other predictors constant.
+
+For every unit increase in **xh4**, the response variable that is **Ratio is estimated to increase by** 1.02075 **units**, holding other predictors constant.
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+
+effect1 = (-1.51028*(log(4) - log(3.5)))+( 1.02075*(log(3.5)-log(3)))
+#sigma1 <- summary(mh)$sigma
+#sigma1 <- sd(data_final$irate)
+#C = exp(0.5 * sigma1^2)
+#effect = C*exp(effect1)
+effect1
+```
+
+*For every unit increase in Mortgage Rate , ratio will decrease by 0.04 units.*

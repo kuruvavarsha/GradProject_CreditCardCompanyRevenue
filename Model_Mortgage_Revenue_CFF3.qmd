@@ -1,0 +1,477 @@
+---
+title: "Mortgage Rate - Revenue - CFF3"
+author: "UC Team"
+format: html
+editor: visual
+---
+
+```{r}
+#| include: false
+
+knitr::opts_chunk$set(
+  fig.align = "center"
+)
+
+library(tidyverse)
+library(lmtest)
+library(tseries)
+library(data.table)
+library(dplyr)
+library(tidyverse)
+library(rmarkdown)
+library(gapminder)
+library(janitor)
+library(lubridate)
+library(scales)
+library(gt)
+library(patchwork)
+library(kableExtra)
+library(data.table)
+library(corrplot)
+library(zoo)
+library(forecast)
+library(fable)
+library(feasts)
+library(tsibble)
+library(tseries)
+library(ggplot2)
+library(psych)
+library(zoo)
+library(gridExtra)
+library(lmtest)
+```
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+
+
+
+CFF_3 <- fread("C:\\Users\\varsh\\OneDrive\\Documents\\Graduate Case Studies\\Data\\CFF_3.csv", header = T)
+#head(CFF_1)
+# Aggregating CFF_1 on month level (Difference of Actuals & Predicted)
+CFF_3_agg <- CFF_3 %>% group_by(`Model Date ID`, `Month Number`, `Transaction Type`) %>% summarize(Amount = sum(Amount))
+CFF_3_agg_wider <- CFF_3_agg %>%
+  pivot_wider(names_from = `Transaction Type`,values_from = Amount) %>%
+  mutate(TotalRevenue= A)
+
+CFF_3_agg_revenue <- CFF_3_agg_wider[,c(2,5)]
+
+CFF_3_agg_revenue<-as.data.frame(CFF_3_agg_revenue)
+base_date <- as.Date("2013-10-01")
+Date <- base_date+ months(CFF_3_agg_revenue$`Month Number`-1)
+CFF_3_agg_revenue <- data.frame(Date = Date,Revenue=CFF_3_agg_revenue$TotalRevenue)
+CFF_3_agg_revenue
+# CFF_1_agg_revenue Final file for CFF_1 monthly aggregated data national level 
+
+
+mortgage_rate<-read.csv("C:\\Users\\varsh\\OneDrive\\Documents\\Graduate Case Studies\\Data\\WeeklyMortgageRate_edited.csv ")
+#head(mortgage_rate)
+#colnames(mortgage_rate) <- c('Date','Mrate')
+
+
+
+
+
+names(mortgage_rate)[2] <- "Mrate"
+
+mortgage_rate <- mortgage_rate %>%
+  filter(Year>=2013 & Date_Key >= '2013-10') %>% # Corrected Date_Key format
+  mutate(Week = yearmonth(Date_Key)) %>% 
+  group_by(Week) %>%
+  summarise(Mrate = mean(Mrate))
+names(mortgage_rate)[1] <- "Date"
+#head(mortgage_rate)
+
+#Appending unemployment rate to CFF_1 Ratio file
+CFF_3_Revenue_Mortgage<-merge(CFF_3_agg_revenue,mortgage_rate, by ="Date")
+head(CFF_3_Revenue_Mortgage)
+write.csv(CFF_3_Revenue_Mortgage,"CFF_3_Revenue_Mortgage.csv")
+```
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+
+# Reading data
+data <- fread("CFF_3_Revenue_Mortgage.csv", header = T, fill = TRUE)
+#head(data)
+summary(data)
+
+data$V1 <- NULL
+# Rename columns
+colnames(data) <- c("time", "Revenue", "Mrate")
+#head(data)
+
+datanew <- data %>%
+   mutate(time = yearmonth(time))
+
+#head(datanew)
+```
+
+## Time Series plot of Revenue of actuals and projections - Variable Y
+
+Revenue has a decreasing trend.
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#Time series plot for Revenue
+datanew %>%
+    ggplot() +
+    geom_line(aes(time,Revenue)) +
+    theme_bw() +
+    ggtitle("Time series plot of Revenue") +
+    xlab("time") +
+    ylab("Revenue")
+
+```
+
+***The data is not stationery - does not pass the stationairty tests .***
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+# Calculate summary statistics
+#head(datanew)
+
+# ADF Test for y1
+invisible(adf.test(datanew$Revenue))
+#Non stationery because p value is greater than 0.05
+# KPSS Test for y1
+invisible(kpss.test(datanew$Revenue))
+#Non stationery because p values <<0.05
+```
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+#Checking for mean stationarity for Revenue column 
+data_roll <- datanew %>%
+  mutate(
+    close_mean = zoo::rollmean(
+      Revenue, 
+      k = 12, 
+      fill = NA),
+    close_sd = zoo::rollapply(
+      Revenue,  
+      FUN = sd, 
+      width = 12, 
+      fill = NA)
+  )
+
+data_rollmean <- data_roll %>%
+  ggplot() +
+  geom_line(aes(time, Revenue)) +
+  geom_line(aes(time, close_mean),color='blue') +
+  theme_bw() +
+  ggtitle("Mean of Difference  over time") +
+  ylab("Revenue of  actuals ") +
+  xlab("Time")
+
+```
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+data_roll <- datanew %>%
+  mutate(
+    close_mean = zoo::rollmean(
+      Revenue, 
+      k = 12, 
+      fill = NA),
+    close_sd = zoo::rollapply(
+      Revenue, 
+      FUN = sd, 
+      width = 12, 
+      fill = NA)
+  )
+data_rollsd <- data_roll %>%
+  ggplot() +
+  geom_line(aes(time, close_sd)) +
+  geom_smooth(aes(time,close_sd),method='lm',se=F)+
+  theme_bw() +
+  ggtitle("Rolling SD Revenue of actuals and predicted") +
+  ylab("Revenue of actuals and predicted") +
+  xlab("Year")
+
+
+
+```
+
+#### [*wt=log(yt)*]{.underline}
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+data_trans <- datanew %>%
+  mutate(data_log = log1p(Revenue)) 
+  
+
+#data_trans %>%
+  #ggplot() +
+  #geom_line(aes(time, data_log)) +
+  #geom_line(aes(time, data_boxcox),color='blue') +
+  #theme_bw() +
+  #ggtitle("Transformed Revenue data") +
+  #ylab("Revenue data transformed") +
+  #xlab("Year")
+```
+
+**Treating for Mean Non Stationarity for Variable Y**
+
+Considering the first difference for to make it mean stationery as follows : ***wd=log(y­~t~)-log(y~t-1~)***
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+data_trans = datanew %>%
+  mutate(data_log = log1p(Revenue),
+  value_log_diff = data_log - lag(data_log))
+
+data_trans %>%
+  ggplot() +
+  geom_line(aes(time, value_log_diff),color = 'blue') +
+  theme_bw() +
+  ggtitle("Transformed and differenced Revenue data") +
+  ylab("Revenue data transformed and differenced") +
+  xlab("Year")
+```
+
+### Stationarity Check for Variable y :
+
+***Variable y is now "stationary"***.
+
+*p value is less than 0.05*
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+
+invisible(adf.test(na.omit(data_trans$value_log_diff)))
+```
+
+## Time Series plot of Variable X : Mortgage rate
+
+Mortgage Rate has multiple fluctuations with a major dip before 2017 and increases after that.
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+
+
+#Time series plot for Mortgage rate
+datanew %>%
+    ggplot() +
+    geom_line(aes(time,Mrate)) +
+    theme_bw() +
+    ggtitle("Time series plot of Mortgage rate") +
+    xlab("time") +
+    ylab(" Mortgage rate")
+```
+
+### Stationarity Test for Variable X :
+
+***Variable X is "non-stationary".***
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+
+# ADF Test for y2
+adf.test(datanew$Mrate)
+#Non stationery because p value is wayy greater than 0.05
+
+# KPSS Test for y2
+kpss.test(datanew$Mrate)
+#Non stationery because p values <<0.05
+```
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#Checking for mean stationarity for Mortgage column 
+data_roll <- datanew %>%
+  mutate(
+    close_mean_mrate = zoo::rollmean(
+      Mrate, 
+      k = 12, 
+      fill = NA),
+    close_sd_mrate = zoo::rollapply(
+      Mrate, 
+      FUN = sd, 
+      width = 12, 
+      fill = NA)
+  )
+
+data_rollmean_mrate <- data_roll %>%
+  ggplot() +
+  geom_line(aes(time, Mrate)) +
+  geom_line(aes(time, close_mean_mrate),color='blue') +
+  theme_bw() +
+  ggtitle("Mean of Mortgage Rate  over time") +
+  ylab("Mortgage Rate") +
+  xlab("Time")
+
+```
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+data_roll <- datanew %>%
+  mutate(
+    close_mean_mrate = zoo::rollmean(
+      Mrate, 
+      k = 12, 
+      fill = NA),
+    close_sd_mrate = zoo::rollapply(
+      Mrate, 
+      FUN = sd, 
+      width = 12, 
+      fill = NA)
+  )
+data_rollsd <- data_roll %>%
+  ggplot() +
+  geom_line(aes(time, close_sd_mrate)) +
+  geom_smooth(aes(time,close_sd_mrate),method='lm',se=F)+
+  theme_bw() +
+  ggtitle("Rolling SD of Mortgage Rate") +
+  ylab("Mortgage Rate") +
+  xlab("Year")
+
+#data_rollsd
+```
+
+#### [*wt=log(xt)*]{.underline}
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+data_trans_2 <- datanew %>%
+  mutate(data_log_mrate = log1p(Mrate)) 
+  #mutate(data_boxcox_unemp = forecast::BoxCox(ratio, lambda = "auto"))
+  
+
+data_trans_2 %>%
+  ggplot() +
+  geom_line(aes(time, data_log_mrate)) +
+  #geom_line(aes(time, data_boxcox_unemp),color='blue') +
+  theme_bw() +
+  ggtitle("Transformed mortgage rate data") +
+  ylab("Mortgage data transformed") +
+  xlab("Year")
+```
+
+***wd=log(xt)-log(xt-1)***
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+
+data_trans_2 = data_trans_2 %>%
+  mutate(data_log_mrate = log1p(Mrate),
+  value_log_diff_mrate = data_log_mrate - lag(data_log_mrate))
+
+data_trans_2 %>%
+  ggplot() +
+  geom_line(aes(time, value_log_diff_mrate),color = 'blue') +
+  theme_bw() +
+  ggtitle("Transformed and differenced mortgage Rate") +
+  ylab("Mortgage data transformed and differenced") +
+  xlab("Year")
+```
+
+***Variable x is now "stationary"***.
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+
+adf.test(na.omit(data_trans_2$value_log_diff_mrate))
+```
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+data_final <- merge(data_trans, data_trans_2, by.x = 'time', by.y = 'time')
+#head(data_final)
+data_final$Revenue.y <- NULL
+data_final$Mrate.y <- NULL
+#data_final$data_log.y <- NULL
+#data_final$value_log_diff.y <- NULL
+#head(data_final)
+colnames(data_final) <- c("time", "revenue", "Mrate", "value_log","value_log_diff", "value_log_mrate", "value_log_diff_mrate")
+#head(data_final)
+```
+
+### Granger Causality, Model Summary and Inferences :
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+
+
+#Granger causality test
+#grangertest(value_log_diff ~ value_log_diff_mrate, order = 3, data = data_final)
+
+#Dynamic regression
+yh <- embed(data_final$value_log_diff,5)
+xh <- embed(data_final$value_log_diff_mrate,5)
+mh <- lm(yh[,1] ~ yh[,2:5] + xh)
+summary(mh)
+
+#ANOVA
+mh2 <- lm(yh[,1] ~ yh[,2:5])
+anova(mh, mh2)
+```
+
+***Therefore, we can conclude that*** Mortgage Granger-causes Revenue.
+
+In this case , **xh3 and xh4** are statistically significant :
+
+For every unit increase in **xh3**, the response variable that is **Revenue** **is estimated to decrease by** **1.71051** **units**, holding other predictors constant.
+
+For every unit increase in **xh4**, the response variable that is **Revenue is estimated to increase by** **1.27530** **units**, holding other predictors constant.
+
+xh2 is also somewhat significant with p value slightly above the threshold of 0.05 but does not meet the threshold barrier.
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+
+effect1 = (-1.71051*(log(3) - log(3.5)))+(1.27530*(log(3.5)-log(4)))
+sigma1 <- summary(mh)$sigma
+C = exp(0.5 * sigma1^2)
+effect = C*exp(effect1)
+effect1
+```

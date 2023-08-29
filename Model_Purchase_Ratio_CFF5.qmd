@@ -1,0 +1,437 @@
+---
+title: "Model for Purchase Index - Ratio - CFF5"
+author: "UC Team"
+format: html
+editor: visual
+---
+
+```{r}
+#| include: false
+
+knitr::opts_chunk$set(
+  fig.align = "center"
+)
+
+library(tidyverse)
+library(lmtest)
+library(tseries)
+library(data.table)
+library(dplyr)
+library(tidyverse)
+library(rmarkdown)
+library(gapminder)
+library(janitor)
+library(lubridate)
+library(scales)
+library(gt)
+library(patchwork)
+library(kableExtra)
+library(data.table)
+library(corrplot)
+library(zoo)
+library(forecast)
+library(fable)
+library(feasts)
+library(tsibble)
+library(tseries)
+library(ggplot2)
+library(psych)
+library(zoo)
+library(gridExtra)
+library(lmtest)
+```
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+
+CFF_5 <- fread("C:\\Users\\varsh\\OneDrive\\Documents\\Graduate Case Studies\\Data\\CFF_5.csv", header = T)
+#model_dates<-read.csv("Data/Model Dates.csv")
+# Aggregating CFF_1 on month level (Difference of Actuals & Predicted)
+CFF_5_agg <- CFF_5 %>% group_by(`Model Date ID`, `Month Number`, `Transaction Type`) %>% summarize(Amount = sum(Amount))
+CFF_5_agg_wider <- CFF_5_agg %>%
+  pivot_wider(names_from = `Transaction Type`,values_from = Amount) %>%
+  mutate(Totalratio= A/P)
+
+CFF_5_agg_ratio <- CFF_5_agg_wider[,c(2,5)]
+
+CFF_5_agg_ratio<-as.data.frame(CFF_5_agg_ratio)
+base_date <- as.Date("2019-10-01")
+Date <- base_date+ months(CFF_5_agg_ratio$`Month Number`-1)
+CFF_5_agg_ratio <- data.frame(Date = Date,ratio=CFF_5_agg_ratio$Totalratio)
+CFF_5_agg_ratio
+
+
+Purchase_index<-read.csv("C:\\Users\\varsh\\OneDrive\\Documents\\Graduate Case Studies\\Data\\Refinance.csv ")
+head(Purchase_index)
+#colnames(mortgage_rate) <- c('Date','PIndex')
+names(Purchase_index)[3] <- "PIndex"
+
+Purchase_index <- Purchase_index %>%
+  filter(Year>=2013 & Date_Key >= '2013-10') %>% # Corrected Date_Key format
+  mutate(Week = yearmonth(Date_Key)) %>% 
+  group_by(Week) %>%
+  summarise(PIndex = mean(PIndex))
+names(Purchase_index)[1] <- "Date"
+head(Purchase_index)
+
+CFF_5_Ratio_Purchase<-merge(CFF_5_agg_ratio,Purchase_index, by ="Date")
+
+write.csv(CFF_5_Ratio_Purchase,"CFF_5_Ratio_Purchase.csv")
+head(CFF_5_Ratio_Purchase)
+```
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+# Reading data
+data <- fread("CFF_5_Ratio_Purchase.csv", header = T, fill = TRUE)
+#head(data)
+#summary(data)
+
+data$V1 <- NULL
+# Rename columns
+colnames(data) <- c("time", "ratio", "PIndex")
+#head(data)
+
+datanew <- data %>%
+   mutate(time = yearmonth(time))
+
+#head(datanew)
+```
+
+## Time Series plot of ratio of actuals and projections - Variable Y
+
+The ratio plot has a lot of fluctuations in the time series plot with a steep dip in 2022.
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#Time series plot for ratio
+datanew %>%
+    ggplot() +
+    geom_line(aes(time,ratio)) +
+    theme_bw() +
+    ggtitle("Time series plot of ratio") +
+    xlab("time") +
+    ylab("ratio")
+
+```
+
+***The data is stationery.***
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+# Calculate summary statistics
+#head(datanew)
+
+# ADF Test for y1
+invisible(adf.test(datanew$ratio))
+#Non stationery because p value is greater than 0.05
+# KPSS Test for y1
+invisible(kpss.test(datanew$ratio))
+#Non stationery because p values <<0.05
+```
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+#Checking for mean stationarity for ratio column 
+data_roll <- datanew %>%
+  mutate(
+    close_mean = zoo::rollmean(
+      ratio, 
+      k = 12, 
+      fill = NA),
+    close_sd = zoo::rollapply(
+      ratio,  
+      FUN = sd, 
+      width = 12, 
+      fill = NA)
+  )
+
+data_rollmean <- data_roll %>%
+  ggplot() +
+  geom_line(aes(time, ratio)) +
+  geom_line(aes(time, close_mean),color='blue') +
+  theme_bw() +
+  ggtitle("Mean of Difference  over time") +
+  ylab("ratio of  actuals ") +
+  xlab("Time")
+
+```
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+data_roll <- datanew %>%
+  mutate(
+    close_mean = zoo::rollmean(
+      ratio, 
+      k = 12, 
+      fill = NA),
+    close_sd = zoo::rollapply(
+      ratio, 
+      FUN = sd, 
+      width = 12, 
+      fill = NA)
+  )
+data_rollsd <- data_roll %>%
+  ggplot() +
+  geom_line(aes(time, close_sd)) +
+  geom_smooth(aes(time,close_sd),method='lm',se=F)+
+  theme_bw() +
+  ggtitle("Rolling SD ratio of actuals and predicted") +
+  ylab("ratio of actuals and predicted") +
+  xlab("Year")
+
+
+
+```
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+data_trans <- datanew %>%
+  mutate(data_log = log1p(ratio)) 
+  
+
+#data_trans %>%
+  #ggplot() +
+  #geom_line(aes(time, data_log)) +
+  #geom_line(aes(time, data_boxcox),color='blue') +
+  #theme_bw() +
+  #ggtitle("Transformed ratio data") +
+  #ylab("ratio data transformed") +
+  #xlab("Year")
+```
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+data_trans = datanew %>%
+  mutate(data_log = log1p(ratio),
+  value_log_diff = data_log - lag(data_log))
+
+data_trans %>%
+  ggplot() +
+  geom_line(aes(time, value_log_diff),color = 'blue') +
+  theme_bw() +
+  ggtitle("Transformed and differenced ratio data") +
+  ylab("ratio data transformed and differenced") +
+  xlab("Year")
+```
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+
+invisible(adf.test(na.omit(data_trans$value_log_diff)))
+```
+
+## Time Series plot of Variable X : Purchase Index
+
+Purchase Index has a lot of fluctuations.
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+
+
+#Time series plot for Purchase Index
+datanew %>%
+    ggplot() +
+    geom_line(aes(time,PIndex)) +
+    theme_bw() +
+    ggtitle("Time series plot of Purchase Index") +
+    xlab("time") +
+    ylab(" Purchase Index")
+```
+
+***Variable X is "non-stationary".***
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+
+# ADF Test for y2
+adf.test(datanew$PIndex)
+#Non stationery because p value is wayy greater than 0.05
+
+# KPSS Test for y2
+kpss.test(datanew$PIndex)
+#Non stationery because p values <<0.05
+```
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#Checking for mean stationarity for Purchase Index column 
+data_roll <- datanew %>%
+  mutate(
+    close_mean_PIndex = zoo::rollmean(
+      PIndex, 
+      k = 12, 
+      fill = NA),
+    close_sd_PIndex = zoo::rollapply(
+      PIndex, 
+      FUN = sd, 
+      width = 12, 
+      fill = NA)
+  )
+
+data_rollmean_PIndex <- data_roll %>%
+  ggplot() +
+  geom_line(aes(time, PIndex)) +
+  geom_line(aes(time, close_mean_PIndex),color='blue') +
+  theme_bw() +
+  ggtitle("Mean of Purchase Index  over time") +
+  ylab("Purchase Rate") +
+  xlab("Time")
+
+```
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+data_roll <- datanew %>%
+  mutate(
+    close_mean_PIndex = zoo::rollmean(
+      PIndex, 
+      k = 12, 
+      fill = NA),
+    close_sd_PIndex = zoo::rollapply(
+      PIndex, 
+      FUN = sd, 
+      width = 12, 
+      fill = NA)
+  )
+data_rollsd <- data_roll %>%
+  ggplot() +
+  geom_line(aes(time, close_sd_PIndex)) +
+  geom_smooth(aes(time,close_sd_PIndex),method='lm',se=F)+
+  theme_bw() +
+  ggtitle("Rolling SD of Purchase Index") +
+  ylab("Purchase Index") +
+  xlab("Year")
+
+#data_rollsd
+```
+
+#### [*wt=log(xt)*]{.underline}
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+data_trans_2 <- datanew %>%
+  mutate(data_log_PIndex = log1p(PIndex)) 
+  #mutate(data_boxcox_unemp = forecast::BoxCox(ratio, lambda = "auto"))
+  
+
+data_trans_2 %>%
+  ggplot() +
+  geom_line(aes(time, data_log_PIndex)) +
+  #geom_line(aes(time, data_boxcox_unemp),color='blue') +
+  theme_bw() +
+  ggtitle("Transformed Purchase Index data") +
+  ylab("Purchase Index transformed") +
+  xlab("Year")
+```
+
+***wd=log(xt)-log(xt-1)***
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+
+data_trans_2 = data_trans_2 %>%
+  mutate(data_log_PIndex = log1p(PIndex),
+  value_log_diff_PIndex = data_log_PIndex - lag(data_log_PIndex))
+
+data_trans_2 %>%
+  ggplot() +
+  geom_line(aes(time, value_log_diff_PIndex),color = 'blue') +
+  theme_bw() +
+  ggtitle("Transformed and differenced Purchase Index") +
+  ylab("Purchase Index transformed and differenced") +
+  xlab("Year")
+```
+
+***Variable x is now "stationary"***.
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+
+adf.test(na.omit(data_trans_2$value_log_diff_PIndex))
+```
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+data_final <- merge(data_trans, data_trans_2, by.x = 'time', by.y = 'time')
+#head(data_final)
+data_final$ratio.y <- NULL
+data_final$PIndex.y <- NULL
+#data_final$data_log.y <- NULL
+#data_final$value_log_diff.y <- NULL
+#head(data_final)
+colnames(data_final) <- c("time", "ratio", "PIndex", "value_log","value_log_diff", "value_log_PIndex", "value_log_diff_PIndex")
+data_final[1, "ratio"] <- NA
+#head(data_final)
+```
+
+### Granger Causality, Model Summary and Inferences :
+
+Purchase Index: xt <br>ratio: yt <br>*Since both these series are nonstationary we have transformed them first before the Granger Causality test.* <br> Δxt = log(xt) − log (xt-1) <br> Δyt = log(𝑦t) − log (𝑦t-1) <br> xh = Δxt <br> yh = Δyt <br>
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+
+#Granger causality test
+#grangertest(value_log_diff ~ value_log_diff_PIndex, order = 4, data = data_final)
+
+#Dynamic regression
+yh <- embed(data_final$ratio,4)
+xh <- embed(data_final$value_log_diff_PIndex,4)
+mh <- lm(yh[,1] ~ yh[,2:4] + xh)
+summary(mh)
+
+#ANOVA
+mh2 <- lm(yh[,1] ~ yh[,2:4])
+anova(mh, mh2)
+```
+
+.***Therefore, we can conclude that*** because of the high p-value of the Anova test between model 1 and 2, we can conclude that Purchase Index does not Granger-cause ratio.

@@ -1,0 +1,429 @@
+---
+title: "Interest Rate vs Actual Revenue - CFF3"
+author: "UC Team"
+format: html
+editor: visual
+---
+
+```{r}
+#| include: false
+
+knitr::opts_chunk$set(
+  fig.align = "center"
+)
+
+library(tidyverse)
+library(lmtest)
+library(tseries)
+library(data.table)
+library(dplyr)
+library(tidyverse)
+library(rmarkdown)
+library(gapminder)
+library(janitor)
+library(lubridate)
+library(scales)
+library(gt)
+library(patchwork)
+library(kableExtra)
+library(data.table)
+library(corrplot)
+library(zoo)
+library(forecast)
+library(fable)
+library(feasts)
+library(tsibble)
+library(tseries)
+library(ggplot2)
+library(psych)
+library(zoo)
+library(gridExtra)
+library(lmtest)
+```
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+
+
+CFF_3 <- fread("C:\\Users\\varsh\\OneDrive\\Documents\\Graduate Case Studies\\Data\\CFF_3.csv", header = T)
+#head(CFF_1)
+# Aggregating CFF_1 on month level (Difference of Actuals & Predicted)
+CFF_3_agg <- CFF_3 %>% group_by(`Model Date ID`, `Month Number`, `Transaction Type`) %>% summarize(Amount = sum(Amount))
+CFF_3_agg_wider <- CFF_3_agg %>%
+  pivot_wider(names_from = `Transaction Type`,values_from = Amount) %>%
+  mutate(TotalRevenue= A)
+
+CFF_3_agg_revenue <- CFF_3_agg_wider[,c(2,5)]
+
+CFF_3_agg_revenue<-as.data.frame(CFF_3_agg_revenue)
+base_date <- as.Date("2013-10-01")
+Date <- base_date+ months(CFF_3_agg_revenue$`Month Number`-1)
+CFF_3_agg_revenue <- data.frame(Date = Date,Revenue=CFF_3_agg_revenue$TotalRevenue)
+CFF_3_agg_revenue
+
+#Interest rate data
+interest <- read.csv("C:\\Users\\varsh\\OneDrive\\Documents\\Graduate Case Studies\\Data\\FEDFUNDS_interest rates.csv")
+interest <- interest %>%
+  mutate(DATE = as.Date(as.character(DATE))) 
+colnames(interest) <- c('Date','interest')
+
+CFF_3_Interest_revenue <- merge(CFF_3_agg_revenue,interest, by = "Date")
+CFF_3_Interest_revenue
+#write.csv(CFF_3_Interest_revenue,"CFF_3_Interest_revenue.csv")
+```
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+# Reading data
+data <- fread("CFF_3_Interest_revenue.csv", header = T, fill = TRUE)
+#head(data)
+#summary(data)
+
+data$V1 <- NULL
+# Rename columns
+colnames(data) <- c("time", "Revenue", "irate")
+#head(data)
+
+datanew <- data %>%
+   mutate(time = yearmonth(time))
+```
+
+## Time series plot of actual revenue - Variable Y
+
+The revenue plot has a decreasing trend.
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#Time series plot for Revenue
+datanew %>%
+    ggplot() +
+    geom_line(aes(time,Revenue)) +
+    theme_bw() +
+    ggtitle("Time series plot of Revenue") +
+    xlab("Time") +
+    ylab("Revenue")
+
+```
+
+***The data is not stationery - does not pass the stationairty tests .***
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+# Calculate summary statistics
+#head(datanew)
+
+# ADF Test for y1
+invisible(adf.test(datanew$Revenue))
+#Non stationery because p value is greater than 0.05
+# KPSS Test for y1
+invisible(kpss.test(datanew$Revenue))
+#Non stationery because p values <<0.05
+```
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+#Checking for mean stationarity for Revenue column 
+data_roll <- datanew %>%
+  mutate(
+    close_mean = zoo::rollmean(
+      Revenue, 
+      k = 12, 
+      fill = NA),
+    close_sd = zoo::rollapply(
+      Revenue,  
+      FUN = sd, 
+      width = 12, 
+      fill = NA)
+  )
+
+data_rollmean <- data_roll %>%
+  ggplot() +
+  geom_line(aes(time, Revenue)) +
+  geom_line(aes(time, close_mean),color='blue') +
+  theme_bw() +
+  ggtitle("Mean of Difference over time") +
+  ylab("Revenue of actuals ") +
+  xlab("Time")
+```
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+data_roll <- datanew %>%
+  mutate(
+    close_mean = zoo::rollmean(
+      Revenue, 
+      k = 12, 
+      fill = NA),
+    close_sd = zoo::rollapply(
+      Revenue, 
+      FUN = sd, 
+      width = 12, 
+      fill = NA)
+  )
+data_rollsd <- data_roll %>%
+  ggplot() +
+  geom_line(aes(time, close_sd)) +
+  geom_smooth(aes(time,close_sd),method='lm',se=F)+
+  theme_bw() +
+  ggtitle("Rolling SD Revenue of actuals revenue") +
+  ylab("Actual Revenue") +
+  xlab("Year")
+```
+
+#### *wt=log(yt)*
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+data_trans <- datanew %>%
+  mutate(data_log = log1p(Revenue)) 
+  
+#data_trans %>%
+  #ggplot() +
+  #geom_line(aes(time, data_log)) +
+  #geom_line(aes(time, data_boxcox),color='blue') +
+  #theme_bw() +
+  #ggtitle("Transformed Revenue data") +
+  #ylab("Revenue data transformed") +
+  #xlab("Year")
+```
+
+#### *wd=log(y­~t~)-log(y~t-1~)*
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+data_trans = datanew %>%
+  mutate(data_log = log1p(Revenue),
+  value_log_diff = data_log - lag(data_log))
+
+data_trans %>%
+  ggplot() +
+  geom_line(aes(time, value_log_diff),color = 'blue') +
+  theme_bw() +
+  ggtitle("Transformed and differenced revenue data") +
+  ylab("Revenue data transformed and differenced") +
+  xlab("Year")
+```
+
+***Variable y is now "stationary"***.
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+
+invisible(adf.test(na.omit(data_trans$value_log_diff)))
+```
+
+## Time Series plot of Variable X : Interest Rate
+
+Interest rates saw a steady decline up until 2009, and have remained constant post that.
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+
+
+#Time series plot for Mortgage rate
+datanew %>%
+    ggplot() +
+    geom_line(aes(time,irate)) +
+    theme_bw() +
+    ggtitle("Time series plot of Interest Rate") +
+    xlab("Time") +
+    ylab("Interest Rate")
+```
+
+***Variable X is "non-stationary".***
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+
+# ADF Test for y2
+adf.test(datanew$irate)
+#Non stationery because p value is wayy greater than 0.05
+
+# KPSS Test for y2
+kpss.test(datanew$irate)
+#Non stationery because p values <<0.05
+```
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+#Checking for mean stationarity for Mortgage column 
+data_roll <- datanew %>%
+  mutate(
+    close_mean_mrate = zoo::rollmean(
+      irate, 
+      k = 12, 
+      fill = NA),
+    close_sd_mrate = zoo::rollapply(
+      irate, 
+      FUN = sd, 
+      width = 12, 
+      fill = NA)
+  )
+
+data_rollmean_mrate <- data_roll %>%
+  ggplot() +
+  geom_line(aes(time, irate)) +
+  geom_line(aes(time, close_mean_mrate),color='blue') +
+  theme_bw() +
+  ggtitle("Mean of Interest Rate over time") +
+  ylab("Interest Rate") +
+  xlab("Time")
+```
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+data_roll <- datanew %>%
+  mutate(
+    close_mean_mrate = zoo::rollmean(
+      irate, 
+      k = 12, 
+      fill = NA),
+    close_sd_mrate = zoo::rollapply(
+      irate, 
+      FUN = sd, 
+      width = 12, 
+      fill = NA)
+  )
+data_rollsd <- data_roll %>%
+  ggplot() +
+  geom_line(aes(time, close_sd_mrate)) +
+  geom_smooth(aes(time,close_sd_mrate),method = 'lm',se = F) +
+  theme_bw() +
+  ggtitle("Rolling SD of Interest Rate") +
+  ylab("Interest Rate") +
+  xlab("Year")
+
+#data_rollsd
+```
+
+#### *wt=log(xt)*
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+
+data_trans_2 <- datanew %>%
+  mutate(data_log_irate = log1p(irate)) 
+  #mutate(data_boxcox_unemp = forecast::BoxCox(ratio, lambda = "auto"))
+  
+#data_trans_2 %>%
+  #ggplot() +
+  #geom_line(aes(time, data_log_irate)) +
+  #geom_line(aes(time, data_boxcox_unemp),color='blue') +
+  #theme_bw() +
+  #ggtitle("Transformed interest rate data") +
+  #ylab("Interest rate data transformed") +
+  #xlab("Year")
+```
+
+#### *wd=log(xt)-log(xt-1)*
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+
+data_trans_2 = data_trans_2 %>%
+  mutate(data_log_irate = log1p(irate),
+  value_log_diff_irate = data_log_irate - lag(data_log_irate))
+
+data_trans_2 %>%
+  ggplot() +
+  geom_line(aes(time, value_log_diff_irate),color = 'blue') +
+  theme_bw() +
+  ggtitle("Transformed and differenced Interest Rate") +
+  ylab("Interest rate data transformed and differenced") +
+  xlab("Year")
+```
+
+***Variable x is now "stationary"***.
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+
+adf.test(na.omit(data_trans_2$value_log_diff_irate))
+```
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+#| include: false
+data_final <- merge(data_trans, data_trans_2, by.x = 'time', by.y = 'time')
+#head(data_final)
+data_final$Revenue.y <- NULL
+data_final$irate.y <- NULL
+#data_final$data_log.y <- NULL
+#data_final$value_log_diff.y <- NULL
+#head(data_final)
+colnames(data_final) <- c("time", "revenue", "irate", "value_log","value_log_diff", "value_log_irate", "value_log_diff_irate")
+#head(data_final)
+```
+
+## Granger Causality, Model Summary and Inferences :
+
+Interest rate: xt <br>Revenue: yt <br>*Since both these series are nonstationary we have transformed them first before the Granger Causality test.* <br> Δxt = log(xt) − log (xt-1) <br> Δyt = log(𝑦t) − log (𝑦t-1) <br> xh = Δxt <br> yh = Δyt <br>
+
+```{r}
+#| echo: true
+#| code-fold: true
+#| warning: false
+
+#Granger causality test
+grangertest(value_log_diff ~ value_log_diff_irate, order = 3, data = data_final)
+
+#Dynamic regression
+yh <- embed(data_final$value_log_diff,6)
+xh <- embed(data_final$value_log_diff_irate,6)
+mh <- lm(yh[,1] ~ yh[,2:6] + xh[,3:6])
+summary(mh)
+
+#ANOVA
+mh2 <- lm(yh[,1] ~ yh[,2:6])
+anova(mh, mh2)
+```
+
+***Therefore, we cannot for sure conclude that*** because of p value of the Anova test being near the threshold, we assume that interest rate might be significant.
+
+In this case , **xh5** is statistically significant :
+
+For every unit increase in **xh5**, the response variable that is **Ratio is estimated to decrease by** **1.41862 units**, holding other predictors constant.
